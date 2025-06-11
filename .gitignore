@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+
+# Node.js / React (Frontend)
+node_modules/
+build/
+.DS_Store # macOS specific
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+# .dockerignore # Geralmente não, mas se tiver algum específico que não deve ir para o repo
