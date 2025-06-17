@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session as SQLASession
 from dotenv import load_dotenv
+from .schemas import UserCreate, UserResponse, SubscriptionCreate, SubscriptionResponse, SubscriptionUpdate
 
 # Carrega variáveis de ambiente do .env (localizado na pasta 'backend')
 # O 'dotenv_path' garante que ele encontre o .env na pasta pai 'backend'
@@ -102,8 +103,66 @@ async def get_all_subscriptions(db: SQLASession = Depends(get_db)):
     subscriptions = db.query(Subscription).all()
     return [sub.to_dict() for sub in subscriptions]
 
+@app.post("/subscriptions/", response_model=SubscriptionResponse, status_code=status.HTTP_201_CREATED)
+async def create_subscription(sub: SubscriptionCreate, db: SQLASession = Depends(get_db)):
+    # POR ENQUANTO: user_id fixo para o usuário de teste criado na inicialização
+    # NO FUTURO: o user_id virá da autenticação (do JWT)
+    test_user = db.query(User).filter_by(email="test@example.com").first()
+    if not test_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Usuário de teste não encontrado. Execute a inicialização do DB."
+        )
 
-# --- Execução da Aplicação (para desenvolvimento local sem Docker) ---
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    new_sub = Subscription(user_id=test_user.id, **sub.dict()) # sub.dict() converte o Pydantic model para dict
+    db.add(new_sub)
+    db.commit()
+    db.refresh(new_sub) # Atualiza o objeto com o ID gerado pelo DB
+    return new_sub
+
+@app.get("/subscriptions/", response_model=list[SubscriptionResponse])
+async def get_all_subscriptions(db: SQLASession = Depends(get_db)):
+    # POR ENQUANTO: Retorna todas as assinaturas sem filtro de usuário
+    subscriptions = db.query(Subscription).all()
+    return subscriptions
+
+@app.get("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
+async def get_subscription(subscription_id: int, db: SQLASession = Depends(get_db)):
+    subscription = db.query(Subscription).filter_by(id=subscription_id).first()
+    if not subscription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assinatura não encontrada."
+        )
+    return subscription
+
+@app.put("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
+async def update_subscription(subscription_id: int, updated_sub: SubscriptionUpdate, db: SQLASession = Depends(get_db)):
+    subscription = db.query(Subscription).filter_by(id=subscription_id).first()
+    if not subscription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assinatura não encontrada."
+        )
+
+    # Atualiza os campos que foram fornecidos no updated_sub
+    for key, value in updated_sub.dict(exclude_unset=True).items():
+        setattr(subscription, key, value)
+
+    subscription.updated_at = datetime.utcnow() # Atualiza o timestamp
+    db.commit()
+    db.refresh(subscription)
+    return subscription
+
+@app.delete("/subscriptions/{subscription_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_subscription(subscription_id: int, db: SQLASession = Depends(get_db)):
+    subscription = db.query(Subscription).filter_by(id=subscription_id).first()
+    if not subscription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assinatura não encontrada."
+        )
+
+    db.delete(subscription)
+    db.commit()
+    return {} # Retorna vazio com status 204
