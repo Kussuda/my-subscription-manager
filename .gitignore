@@ -1,5 +1,5 @@
 # Python
-.venv/
+backend/venv/
 __pycache__/
 *.pyc
 *.egg-info/
@@ -14,4 +14,4 @@ yarn-debug.log*
 yarn-error.log*
 
 # Docker
-# .dockerignore # Geralmente não, mas se tiver algum específico que não deve ir para o repo
+# .dockerignore
