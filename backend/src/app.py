@@ -8,6 +8,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session as SQLASession
 from dotenv import load_dotenv
 from .schemas import UserCreate, UserResponse, SubscriptionCreate, SubscriptionResponse, SubscriptionUpdate
+from .auth import get_password_hash, verify_password, create_access_token, get_current_active_user, oauth2_scheme
+from .schemas import UserCreate, UserResponse, SubscriptionCreate, SubscriptionResponse, SubscriptionUpdate, Token
+from fastapi.security import OAuth2PasswordRequestForm
 
 # Carrega variáveis de ambiente do .env (localizado na pasta 'backend')
 # O 'dotenv_path' garante que ele encontre o .env na pasta pai 'backend'
@@ -55,10 +58,11 @@ async def startup_event():
     db = SessionLocal()
     try:
         if not db.query(User).filter_by(email="test@example.com").first():
-            test_user = User(email="test@example.com", password_hash="hashed_password_placeholder")
+            hashed_password = get_password_hash("testpassword") # Senha de teste
+            test_user = User(email="test@example.com", password_hash=hashed_password)
             db.add(test_user)
             db.commit()
-            db.refresh(test_user) # Atualiza o objeto para ter o ID gerado
+            db.refresh(test_user)
             print("Usuário de teste 'test@example.com' criado.")
         else:
             print("Usuário de teste 'test@example.com' já existe.")
@@ -78,61 +82,55 @@ async def read_root():
 
 
 # --- Exemplo de Rota para Usuário (simplificado, sem autenticação real ainda) ---
-@app.post("/users/")
-async def create_user(email: str, password: str, db: SQLASession = Depends(get_db)):
-    """Cria um novo usuário (apenas para demonstração inicial, senhas não hasheadas)."""
-    # NO FUTURO: Você deve hashear a senha antes de salvar!
-    existing_user = db.query(User).filter_by(email=email).first()
+@app.post("/users/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(user: UserCreate, db: SQLASession = Depends(get_db)):
+    existing_user = db.query(User).filter_by(email=user.email).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email já registrado."
         )
-    
-    new_user = User(email=email, password_hash=password) # Usar password diretamente para teste
+
+    hashed_password = get_password_hash(user.password) # HASH da senha aqui!
+    new_user = User(email=user.email, password_hash=hashed_password)
     db.add(new_user)
     db.commit()
-    db.refresh(new_user) # Atualiza o objeto para ter o ID gerado
+    db.refresh(new_user)
+    return new_user
 
-    return new_user.to_dict()
-
-# --- Exemplo de Rota para Assinaturas (simplificado, sem autenticação real ainda) ---
-@app.get("/subscriptions/")
-async def get_all_subscriptions(db: SQLASession = Depends(get_db)):
-    """Retorna todas as assinaturas (sem filtro por usuário ainda)."""
-    subscriptions = db.query(Subscription).all()
-    return [sub.to_dict() for sub in subscriptions]
 
 @app.post("/subscriptions/", response_model=SubscriptionResponse, status_code=status.HTTP_201_CREATED)
-async def create_subscription(sub: SubscriptionCreate, db: SQLASession = Depends(get_db)):
-    # POR ENQUANTO: user_id fixo para o usuário de teste criado na inicialização
-    # NO FUTURO: o user_id virá da autenticação (do JWT)
-    test_user = db.query(User).filter_by(email="test@example.com").first()
-    if not test_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Usuário de teste não encontrado. Execute a inicialização do DB."
-        )
-
-    new_sub = Subscription(user_id=test_user.id, **sub.dict()) # sub.dict() converte o Pydantic model para dict
+async def create_subscription(
+    sub: SubscriptionCreate,
+    current_user: User = Depends(get_current_active_user), # ADICIONADO!
+    db: SQLASession = Depends(get_db)
+):
+    new_sub = Subscription(user_id=current_user.id, **sub.dict()) # user_id vem do usuário autenticado
     db.add(new_sub)
     db.commit()
-    db.refresh(new_sub) # Atualiza o objeto com o ID gerado pelo DB
+    db.refresh(new_sub)
     return new_sub
 
 @app.get("/subscriptions/", response_model=list[SubscriptionResponse])
-async def get_all_subscriptions(db: SQLASession = Depends(get_db)):
-    # POR ENQUANTO: Retorna todas as assinaturas sem filtro de usuário
-    subscriptions = db.query(Subscription).all()
+async def get_all_subscriptions(
+    current_user: User = Depends(get_current_active_user), # ADICIONADO!
+    db: SQLASession = Depends(get_db)
+):
+    # Agora filtra por user_id
+    subscriptions = db.query(Subscription).filter_by(user_id=current_user.id).all()
     return subscriptions
 
 @app.get("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
-async def get_subscription(subscription_id: int, db: SQLASession = Depends(get_db)):
-    subscription = db.query(Subscription).filter_by(id=subscription_id).first()
+async def get_subscription(
+    subscription_id: int,
+    current_user: User = Depends(get_current_active_user), # ADICIONADO!
+    db: SQLASession = Depends(get_db)
+):
+    subscription = db.query(Subscription).filter_by(id=subscription_id, user_id=current_user.id).first() # FILTRAR POR USER_ID
     if not subscription:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Assinatura não encontrada."
+            detail="Assinatura não encontrada ou não pertence ao usuário."
         )
     return subscription
 
@@ -162,7 +160,22 @@ async def delete_subscription(subscription_id: int, db: SQLASession = Depends(ge
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assinatura não encontrada."
         )
-
+    
     db.delete(subscription)
     db.commit()
     return {} # Retorna vazio com status 204
+
+@app.post("/token", response_model=Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: SQLASession= Depends(get_db)):
+    user = db.query(User).filter_by(email=form_data.username).first()
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Nome de usuário ou senha incorretos",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30)))
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
