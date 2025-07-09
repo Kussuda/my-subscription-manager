@@ -1,7 +1,7 @@
 # backend/src/app.py
 
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine
@@ -102,7 +102,7 @@ async def create_user(user: UserCreate, db: SQLASession = Depends(get_db)):
 @app.post("/subscriptions/", response_model=SubscriptionResponse, status_code=status.HTTP_201_CREATED)
 async def create_subscription(
     sub: SubscriptionCreate,
-    current_user: User = Depends(get_current_active_user), # ADICIONADO!
+    current_user: User = Depends(get_current_active_user),
     db: SQLASession = Depends(get_db)
 ):
     new_sub = Subscription(user_id=current_user.id, **sub.dict()) # user_id vem do usuário autenticado
@@ -113,7 +113,7 @@ async def create_subscription(
 
 @app.get("/subscriptions/", response_model=list[SubscriptionResponse])
 async def get_all_subscriptions(
-    current_user: User = Depends(get_current_active_user), # ADICIONADO!
+    current_user: User = Depends(get_current_active_user),
     db: SQLASession = Depends(get_db)
 ):
     # Agora filtra por user_id
@@ -123,7 +123,7 @@ async def get_all_subscriptions(
 @app.get("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
 async def get_subscription(
     subscription_id: int,
-    current_user: User = Depends(get_current_active_user), # ADICIONADO!
+    current_user: User = Depends(get_current_active_user),
     db: SQLASession = Depends(get_db)
 ):
     subscription = db.query(Subscription).filter_by(id=subscription_id, user_id=current_user.id).first() # FILTRAR POR USER_ID
